@@ -14,6 +14,8 @@ canvas { display:block; touch-action:none; }
 #score { font-size:22px; font-weight:700; color:#555; text-align:right; }
 #stageLabel { position:absolute; top:50px; left:22px; font-size:11px; color:#666; letter-spacing:0.1em; font-weight:bold; pointer-events:none; }
 #windIndicator { position:absolute; top:52px; right:22px; font-size:11px; color:#666; pointer-events:none; font-weight:bold; }
+#fireStatus { position:absolute; bottom:20px; left:0; width:100%; display:flex; justify-content:center; pointer-events:none; }
+#fireBadge { background:rgba(255,255,255,0.85); border-radius:20px; padding:6px 16px; font-size:13px; font-weight:bold; color:#e55; display:none; box-shadow:0 2px 10px rgba(0,0,0,0.1); }
 #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(255,255,255,0.7); backdrop-filter:blur(6px); z-index:10; }
 .screen { background:rgba(255,255,255,0.95); border-radius:32px; padding:36px 25px; width:320px; text-align:center; box-shadow:0 10px 40px rgba(0,0,0,0.1); color:#444; }
 .screen h1 { font-size:24px; margin-bottom:8px; color:#333; }
@@ -34,13 +36,14 @@ canvas { display:block; touch-action:none; }
   <div id="ui"><div id="hpBar"></div><div id="score">0</div></div>
   <div id="stageLabel"></div>
   <div id="windIndicator"></div>
+  <div id="fireStatus"><div id="fireBadge">🔥 ファイア×<span id="fireCount">0</span></div></div>
   <div id="overlay"><div class="screen" id="overlayContent">
     <h1>👴 Adventure</h1>
-    <p>心地よい旅に出かけましょう。<br>ステージが進むほど難しくなります！</p>
+    <p>心地よい旅に出かけましょう。<br>ステージが進むほど難しくなります！<br><br>🔥 アイテムを取ると炎が出せる！<br>（ダブルタップ / Xキー で発射）</p>
     <button class="stageBtn s1" onclick="startGame(1)">Stage 1: 雲の旅 🌬️<span class="diff-badge">★☆☆</span></button>
     <button class="stageBtn s2" onclick="startGame(2)">Stage 2: 地上の旅 🪵<span class="diff-badge">★★☆</span></button>
     <button class="stageBtn s3" onclick="startGame(3)">Stage 3: 砂漠の旅 🔥<span class="diff-badge">★★★</span></button>
-    <p class="hint">タップ / スペースキー でジャンプ</p>
+    <p class="hint">タップ/スペース: ジャンプ　ダブルタップ/X: 炎発射</p>
   </div></div>
 </div>
 <script>
@@ -53,13 +56,21 @@ const hpBarEl=document.getElementById('hpBar');
 const scoreEl=document.getElementById('score');
 const stageLabelEl=document.getElementById('stageLabel');
 const windIndicatorEl=document.getElementById('windIndicator');
+const fireBadgeEl=document.getElementById('fireBadge');
+const fireCountEl=document.getElementById('fireCount');
 
 let state='start', stage=1, score=0, hp=5, maxHp=5;
 let gameLoopId, invincible=false, invTimer=0;
 let goalWX=0, cameraX=0, gameWon=false, tick=0;
 let wind=0, windTarget=0, windTimer=0;
 
-// ── 難易度パラメータ（ステージごとに変化）──
+// ── ファイア関連 ──
+let fireAmmo=0;
+let fireballs=[];
+let fireCooldown=0;
+let lastTapTime=0;
+
+// ── 難易度パラメータ ──
 function getDiff(s) {
   if(s===1) return { autoVX:2.5,  gapMin:70,  gapMax:95,  gapFreq:0.55, platW:[90,150],  platFreq:0.45, enemyVX:1.3, enemyFreq:0.55, enemyCount:1, windStrength:1.2 };
   if(s===2) return { autoVX:3.2,  gapMin:95,  gapMax:130, gapFreq:0.70, platW:[70,115],  platFreq:0.50, enemyVX:1.8, enemyFreq:0.60, enemyCount:2, windStrength:0   };
@@ -73,18 +84,20 @@ function getStageCfg(s) {
 }
 
 function backToMenu() {
-  state='start'; overlay.style.display='flex'; windIndicatorEl.textContent='';
-  overlayContent.innerHTML=`<h1>👴 Adventure</h1><p>心地よい旅に出かけましょう。<br>ステージが進むほど難しくなります！</p>
+  state='start'; overlay.style.display='flex'; windIndicatorEl.textContent=''; fireBadgeEl.style.display='none';
+  overlayContent.innerHTML=`<h1>👴 Adventure</h1><p>心地よい旅に出かけましょう。<br>ステージが進むほど難しくなります！<br><br>🔥 アイテムを取ると炎が出せる！<br>（ダブルタップ / Xキー で発射）</p>
     <button class="stageBtn s1" onclick="startGame(1)">Stage 1: 雲の旅 🌬️<span class="diff-badge">★☆☆</span></button>
     <button class="stageBtn s2" onclick="startGame(2)">Stage 2: 地上の旅 🪵<span class="diff-badge">★★☆</span></button>
     <button class="stageBtn s3" onclick="startGame(3)">Stage 3: 砂漠の旅 🔥<span class="diff-badge">★★★</span></button>
-    <p class="hint">タップ / スペースキー でジャンプ</p>`;
+    <p class="hint">タップ/スペース: ジャンプ　ダブルタップ/X: 炎発射</p>`;
 }
 
 function startGame(s) {
   stage=s; score=0; hp=maxHp=5; cameraX=0; invincible=false; gameWon=false; tick=0; wind=0; windTarget=0; windTimer=0;
+  fireAmmo=0; fireballs=[]; fireCooldown=0; lastTapTime=0;
   overlay.style.display='none'; state='playing';
   stageLabelEl.textContent=getStageCfg(s).name;
+  updateFireUI();
   generateLevel(s);
   if(gameLoopId) cancelAnimationFrame(gameLoopId);
   loop();
@@ -94,22 +107,18 @@ let segments=[], platforms=[], enemies=[], items=[], particles=[], bgElements=[]
 let floatingTexts=[], birds=[], trees=[], desertDeco=[];
 
 function generateLevel(s) {
-  player={worldX:80,y:400,vy:0,onGround:false,w:30,h:55};
-  segments=[]; platforms=[]; enemies=[]; items=[]; particles=[]; bgElements=[]; floatingTexts=[];
+  player={worldX:80,y:400,vy:0,onGround:false,w:30,h:55,facing:1};
+  segments=[]; platforms=[]; enemies=[]; items=[]; particles=[]; bgElements=[]; floatingTexts=[]; fireballs=[];
   birds=[]; trees=[]; desertDeco=[];
 
   const cfg=getStageCfg(s), diff=getDiff(s);
   let cx=0; const totalW=4800;
 
   while(cx<totalW) {
-    // 序盤は広めの足場、中盤以降は狭く
-    const progress=Math.min(cx/totalW,1);
-    const wMin=180+progress*(120-180)*0; // 地面は広めキープ
     const segW=280+Math.random()*180;
     const y=515+Math.random()*55;
     segments.push({wx:cx,y,w:segW});
 
-    // 空中足場（難易度で幅・頻度変化）
     if(cx>350 && Math.random()<diff.platFreq) {
       const [pwMin,pwMax]=diff.platW;
       const pw=pwMin+Math.random()*(pwMax-pwMin);
@@ -122,10 +131,9 @@ function generateLevel(s) {
       platforms.push({wx:pWX,y:py,w:pw,baseWX:pWX,baseY:py,moving,moveType,moveRange,moveSpeed,phase:Math.random()*Math.PI*2});
     }
 
-    // ギャップ（難易度で幅変化、序盤は小さめ）
     let gap=0;
     if(cx>350 && cx<totalW-700 && Math.random()<diff.gapFreq) {
-      const safeMin=Math.min(diff.gapMin, 85); // 最初の数個は少し優しく
+      const safeMin=Math.min(diff.gapMin, 85);
       const gMin=cx<800 ? safeMin : diff.gapMin;
       gap=gMin+Math.random()*(diff.gapMax-gMin);
     }
@@ -133,15 +141,14 @@ function generateLevel(s) {
   }
   goalWX=cx-300;
 
-  // 敵・アイテム配置
   [...segments,...platforms].forEach((seg,idx)=>{
     if(idx===0) return;
     const r=Math.random();
     if(r>0.58){
-      const type=r>0.88?'heart':(r>0.72?'flower':'apple');
+      const roll=Math.random();
+      const type=r>0.88?'heart': roll<0.35?'fire': roll<0.65?'apple':'flower';
       items.push({wx:seg.wx+seg.w/2,y:seg.y-58,type,taken:false});
     }
-    // 敵：ステージ2以降は複数体
     if(seg.w>90 && Math.random()<diff.enemyFreq) {
       const count=seg.w>160 ? diff.enemyCount : 1;
       for(let i=0;i<count;i++){
@@ -154,7 +161,6 @@ function generateLevel(s) {
 
   for(let i=0;i<15;i++) bgElements.push({wx:Math.random()*5500,y:50+Math.random()*300,size:28+Math.random()*50});
 
-  // Stage1: 鳥
   if(s===1){
     for(let g=0;g<4;g++){
       const baseX=300+g*1200,baseY=70+Math.random()*210,dir=Math.random()>0.5?1:-1;
@@ -162,9 +168,7 @@ function generateLevel(s) {
         birds.push({wx:baseX+i*55*dir,y:baseY+(Math.random()-0.5)*55,speed:(0.5+Math.random()*0.6)*dir,wingPhase:Math.random()*Math.PI*2,wingSpeed:0.07+Math.random()*0.05,size:0.55+Math.random()*0.5});
     }
   }
-  // Stage2: 木
   if(s===2) for(let i=0;i<35;i++) trees.push({wx:50+Math.random()*5500,scale:0.5+Math.random()*0.9,type:Math.floor(Math.random()*3),sway:Math.random()*Math.PI*2,swaySpeed:0.005+Math.random()*0.005,layer:Math.random()>0.5?'far':'near'});
-  // Stage3: 砂漠
   if(s===3) for(let i=0;i<30;i++){const r=Math.random();desertDeco.push({wx:100+Math.random()*5400,type:r<0.35?'cactus':r<0.6?'cactus2':r<0.8?'rock':'skull',scale:0.5+Math.random()*0.8,layer:Math.random()>0.5?'far':'near'});}
 
   updateHUD();
@@ -174,11 +178,43 @@ function updateHUD(){
   hpBarEl.innerHTML=Array.from({length:maxHp},(_,i)=>`<span style="color:${i<hp?'#ffb7b7':'#eee'}">●</span>`).join('');
   scoreEl.textContent=score.toLocaleString();
 }
+
+function updateFireUI(){
+  if(fireAmmo>0){
+    fireBadgeEl.style.display='block';
+    fireCountEl.textContent=fireAmmo;
+  } else {
+    fireBadgeEl.style.display='none';
+  }
+}
+
 function updateWindIndicator(){
   if(!getStageCfg(stage).hasWind||Math.abs(wind)<0.1){windIndicatorEl.textContent='';return;}
   const str=Math.abs(wind)<0.5?'弱':'強';
   windIndicatorEl.textContent=wind<0?`← ${str}風`:`${str}風 →`;
   windIndicatorEl.style.color=Math.abs(wind)>0.6?'#e5989b':'#7fb3d5';
+}
+
+// ── ファイアボール発射 ──
+function shootFireball(){
+  if(state!=='playing'||!player) return;
+  if(fireAmmo<=0) return;
+  if(fireCooldown>0) return;
+  fireAmmo--;
+  fireCooldown=18;
+  const dir=player.facing||1;
+  fireballs.push({
+    wx: player.worldX + (dir>0?30:0),
+    y: player.y+20,
+    vx: dir*9,
+    vy: -1,
+    life: 55,
+    trail: [],
+    size: 13
+  });
+  spawnParticles(80+(dir>0?30:0), player.y+20, '#ff9940');
+  addFloat('🔥', 80+(dir>0?30:0), player.y+10, '#ff6600');
+  updateFireUI();
 }
 
 function loop(){if(state==='playing'){update();draw();gameLoopId=requestAnimationFrame(loop);}}
@@ -191,6 +227,8 @@ function update(){
     windTimer--; if(windTimer<=0){windTarget=(Math.random()-0.5)*diff.windStrength;windTimer=100+Math.random()*160;}
     wind+=(windTarget-wind)*0.022; updateWindIndicator();
   }
+
+  if(fireCooldown>0) fireCooldown--;
 
   platforms.forEach(p=>{
     if(!p.moving) return;
@@ -218,6 +256,40 @@ function update(){
 
   if(player.y>H){hp=0;gameOver('崖から落ちてしまいました');return;}
 
+  // ── ファイアボール更新 ──
+  for(let i=fireballs.length-1;i>=0;i--){
+    const fb=fireballs[i];
+    fb.trail.push({x:fb.wx-cameraX, y:fb.y, life:12});
+    fb.wx+=fb.vx;
+    fb.vy+=0.18;
+    fb.y+=fb.vy;
+    fb.life--;
+    fb.trail.forEach((t,j)=>{t.life--;if(t.life<=0)fb.trail.splice(j,1);});
+
+    if(fb.life<=0||fb.wx-cameraX>W+50||fb.wx-cameraX<-50){fireballs.splice(i,1);continue;}
+
+    let hitSurface=false;
+    [...segments,...platforms].forEach(seg=>{
+      if(fb.wx>seg.wx&&fb.wx<seg.wx+seg.w&&fb.y+8>seg.y&&fb.y<seg.y+20) hitSurface=true;
+    });
+    if(hitSurface){
+      spawnFireExplosion(fb.wx-cameraX, fb.y);
+      fireballs.splice(i,1); continue;
+    }
+
+    let hitEnemy=false;
+    enemies.forEach(e=>{
+      if(!e.alive) return;
+      if(fb.wx>e.wx&&fb.wx<e.wx+e.w&&fb.y>e.y&&fb.y<e.y+e.h){
+        e.alive=false; score+=400; hitEnemy=true;
+        spawnFireExplosion(e.wx-cameraX,e.y);
+        addFloat('🔥+400',e.wx-cameraX,e.y,'#ff5500');
+        updateHUD();
+      }
+    });
+    if(hitEnemy){fireballs.splice(i,1); continue;}
+  }
+
   enemies.forEach(e=>{
     if(!e.alive) return;
     e.wx+=e.vx; if(e.wx<e.startWX||e.wx>e.endWX)e.vx*=-1;
@@ -234,7 +306,19 @@ function update(){
     if(px<itm.wx+25&&px+player.w>itm.wx-25&&player.y<itm.y+25&&player.y+player.h>itm.y-25){
       itm.taken=true;
       if(itm.type==='heart'){if(hp<maxHp)hp++;addFloat('❤️ HP+1',itm.wx-cameraX,itm.y,'#ff6b9d');}
-      else if(itm.type==='flower'){score+=300;addFloat('+300',itm.wx-cameraX,itm.y,'#a78bfa');}
+      else if(itm.type==='fire'){
+        fireAmmo+=3;
+        addFloat('🔥×3 GET!',itm.wx-cameraX,itm.y,'#ff5500');
+        spawnFireBurst(itm.wx-cameraX, itm.y);
+        score+=50;
+        updateFireUI();
+      }
+      else if(itm.type==='flower'){
+        score+=300;
+        fireAmmo+=1;
+        addFloat('+300 🔥×1',itm.wx-cameraX,itm.y,'#a78bfa');
+        updateFireUI();
+      }
       else{score+=100;addFloat('+100',itm.wx-cameraX,itm.y,'#f59e0b');}
       spawnParticles(itm.wx-cameraX,itm.y,'#ffb7b7'); updateHUD();
     }
@@ -243,6 +327,22 @@ function update(){
   particles.forEach((p,i)=>{p.x+=p.vx;p.y+=p.vy;p.life--;if(p.life<=0)particles.splice(i,1);});
   floatingTexts.forEach((t,i)=>{t.y-=1.2;t.life--;if(t.life<=0)floatingTexts.splice(i,1);});
   if(player.worldX>goalWX&&!gameWon){gameWon=true;state='clear';showClear();}
+}
+
+// ── エフェクト関数 ──
+function spawnFireExplosion(x,y){
+  for(let i=0;i<14;i++){
+    const angle=Math.random()*Math.PI*2;
+    const speed=2+Math.random()*4;
+    particles.push({x,y,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed-1,life:22+Math.random()*15,color:['#ff3300','#ff6600','#ff9900','#ffcc00'][Math.floor(Math.random()*4)]});
+  }
+}
+function spawnFireBurst(x,y){
+  for(let i=0;i<20;i++){
+    const angle=Math.random()*Math.PI*2;
+    const speed=1.5+Math.random()*5;
+    particles.push({x,y,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed-2,life:30+Math.random()*20,color:['#ff3300','#ff6600','#ff9900','#ffcc00','#fff'][Math.floor(Math.random()*5)]});
+  }
 }
 
 /* ───── 背景描画ヘルパー ───── */
@@ -307,29 +407,58 @@ function drawSkull(x,gy,sc){
   ctx.restore();
 }
 
+/* ───── ファイアボール描画 ───── */
+function drawFireball(fb){
+  const sx=fb.wx-cameraX, sy=fb.y;
+
+  fb.trail.forEach((t,i)=>{
+    const a=t.life/12*0.7;
+    const r=fb.size*(t.life/12);
+    ctx.globalAlpha=a;
+    ctx.fillStyle=i%2===0?'#ff9900':'#ff5500';
+    ctx.beginPath();ctx.arc(t.x,t.y,r*0.7,0,Math.PI*2);ctx.fill();
+  });
+  ctx.globalAlpha=1;
+
+  const pulse=0.85+Math.sin(tick*0.4)*0.15;
+  ctx.fillStyle='#ff6600';
+  ctx.beginPath();ctx.arc(sx,sy,fb.size*pulse,0,Math.PI*2);ctx.fill();
+
+  ctx.fillStyle='#ffaa00';
+  ctx.beginPath();ctx.arc(sx-1,sy-1,fb.size*0.65*pulse,0,Math.PI*2);ctx.fill();
+
+  ctx.fillStyle='#ffffff';
+  ctx.beginPath();ctx.arc(sx-1,sy-1,fb.size*0.3,0,Math.PI*2);ctx.fill();
+
+  for(let s=0;s<3;s++){
+    const a=tick*0.3+s*2.1;
+    const r=fb.size*1.2;
+    ctx.fillStyle='#ffdd00';
+    ctx.globalAlpha=0.7;
+    ctx.beginPath();ctx.arc(sx+Math.cos(a)*r,sy+Math.sin(a)*r,2,0,Math.PI*2);ctx.fill();
+  }
+  ctx.globalAlpha=1;
+}
+
 /* ───── メイン描画 ───── */
 function draw(){
   const cfg=getStageCfg(stage);
 
-  // 空
   const grad=ctx.createLinearGradient(0,0,0,H);
   grad.addColorStop(0,cfg.sky[0]);grad.addColorStop(1,cfg.sky[1]);
   ctx.fillStyle=grad;ctx.fillRect(0,0,W,H);
 
-  // Stage1: 太陽
   if(stage===1){
     const sx=W*0.8,sy=70;
     ctx.fillStyle='rgba(255,240,180,0.22)';ctx.beginPath();ctx.arc(sx,sy,70,0,Math.PI*2);ctx.fill();
     ctx.fillStyle='rgba(255,235,150,0.5)';ctx.beginPath();ctx.arc(sx,sy,35,0,Math.PI*2);ctx.fill();
     ctx.fillStyle='rgba(255,250,200,0.95)';ctx.beginPath();ctx.arc(sx,sy,22,0,Math.PI*2);ctx.fill();
   }
-  // Stage2: 遠景の山
   if(stage===2){
     ctx.fillStyle='rgba(120,180,120,0.18)';ctx.beginPath();ctx.moveTo(0,430);
     for(let x=0;x<=W;x+=35) ctx.lineTo(x,430-Math.abs(Math.sin((x-cameraX*0.04)/100))*130);
     ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fill();
   }
-  // Stage3: 太陽・砂丘
   if(stage===3){
     const sx=W*0.78,sy=60;
     for(let r=80;r>0;r-=15){ctx.fillStyle=`rgba(255,${180+r},50,${0.04+r*0.002})`;ctx.beginPath();ctx.arc(sx,sy,r,0,Math.PI*2);ctx.fill();}
@@ -339,34 +468,24 @@ function draw(){
     ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();ctx.fill();
   }
 
-  // 背景雲
   bgElements.forEach(el=>{
     ctx.fillStyle=stage===1?'rgba(255,255,255,0.65)':'rgba(255,255,255,0.3)';
     ctx.beginPath();ctx.arc(el.wx-cameraX*0.28,el.y,el.size,0,Math.PI*2);ctx.fill();
     if(stage===1){ctx.fillStyle='rgba(255,255,255,0.3)';ctx.beginPath();ctx.arc(el.wx-cameraX*0.28+el.size*0.6,el.y-5,el.size*0.65,0,Math.PI*2);ctx.fill();}
   });
 
-  // 風エフェクト
   if(cfg.hasWind&&Math.abs(wind)>0.15){
     const s=Math.abs(wind)/1.8;
     for(let i=0;i<6;i++){const wx=((tick*3*(wind>0?1:-1)+i*70)%500+500)%500;ctx.strokeStyle=`rgba(180,220,255,${s*0.3})`;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(wx,60+i*55);ctx.lineTo(wx+(wind>0?35:-35),60+i*55);ctx.stroke();}
   }
 
-  // Stage1: 鳥（遠・近2レイヤー）
   if(stage===1){
     birds.filter((_,i)=>i%2===0).forEach(b=>{const sx=b.wx-cameraX*0.5;if(sx<-60||sx>W+60)return;ctx.globalAlpha=0.45;drawBird(sx,b.y,b.wingPhase,b.size*0.65);ctx.globalAlpha=1;});
     birds.filter((_,i)=>i%2===1).forEach(b=>{const sx=b.wx-cameraX*0.75;if(sx<-60||sx>W+60)return;ctx.globalAlpha=0.8;drawBird(sx,b.y,b.wingPhase,b.size);ctx.globalAlpha=1;});
   }
-  // Stage2: 遠景の木
-  if(stage===2){
-    trees.filter(t=>t.layer==='far').forEach(t=>{const sx=t.wx-cameraX*0.55;if(sx<-100||sx>W+100)return;ctx.globalAlpha=0.4;if(t.type===0)drawBroadTree(sx,515,t.scale*0.75,t.sway);else if(t.type===1)drawConiferTree(sx,515,t.scale*0.75,t.sway);else drawBush(sx,515,t.scale*0.8);ctx.globalAlpha=1;});
-  }
-  // Stage3: 遠景の砂漠オブジェクト
-  if(stage===3){
-    desertDeco.filter(d=>d.layer==='far').forEach(d=>{const sx=d.wx-cameraX*0.55;if(sx<-80||sx>W+80)return;ctx.globalAlpha=0.3;if(d.type==='cactus')drawCactus(sx,525,d.scale*0.7);else if(d.type==='cactus2')drawCactus2(sx,515,d.scale*0.7);else if(d.type==='rock')drawRock(sx,522,d.scale*0.8);else drawSkull(sx,518,d.scale*0.6);ctx.globalAlpha=1;});
-  }
+  if(stage===2){trees.filter(t=>t.layer==='far').forEach(t=>{const sx=t.wx-cameraX*0.55;if(sx<-100||sx>W+100)return;ctx.globalAlpha=0.4;if(t.type===0)drawBroadTree(sx,515,t.scale*0.75,t.sway);else if(t.type===1)drawConiferTree(sx,515,t.scale*0.75,t.sway);else drawBush(sx,515,t.scale*0.8);ctx.globalAlpha=1;});}
+  if(stage===3){desertDeco.filter(d=>d.layer==='far').forEach(d=>{const sx=d.wx-cameraX*0.55;if(sx<-80||sx>W+80)return;ctx.globalAlpha=0.3;if(d.type==='cactus')drawCactus(sx,525,d.scale*0.7);else if(d.type==='cactus2')drawCactus2(sx,515,d.scale*0.7);else if(d.type==='rock')drawRock(sx,522,d.scale*0.8);else drawSkull(sx,518,d.scale*0.6);ctx.globalAlpha=1;});}
 
-  /* 地面 */
   function drawCloud(x,y,w){
     ctx.fillStyle='#fff';ctx.shadowBlur=14;ctx.shadowColor='rgba(100,160,220,0.1)';
     for(let i=-10;i<w+10;i+=25){ctx.beginPath();ctx.arc(x+i,y+10,25,0,Math.PI*2);ctx.fill();ctx.globalAlpha=0.35;ctx.beginPath();ctx.arc(x+i+6,y+4,30,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}
@@ -388,7 +507,6 @@ function draw(){
     }
   });
 
-  /* 足場 */
   platforms.forEach(p=>{
     const sx=p.wx-cameraX; if(sx>W||sx+p.w<0) return;
     if(stage===1){
@@ -411,13 +529,23 @@ function draw(){
     }
   });
 
-  // Stage2: 近景の木
   if(stage===2){trees.filter(t=>t.layer==='near').forEach(t=>{const sx=t.wx-cameraX*0.82;if(sx<-100||sx>W+100)return;ctx.globalAlpha=0.6;if(t.type===0)drawBroadTree(sx,530,t.scale*0.9,t.sway);else if(t.type===1)drawConiferTree(sx,530,t.scale*0.9,t.sway);else drawBush(sx,530,t.scale);ctx.globalAlpha=1;});}
-  // Stage3: 近景の砂漠オブジェクト
   if(stage===3){desertDeco.filter(d=>d.layer==='near').forEach(d=>{const sx=d.wx-cameraX*0.82;if(sx<-80||sx>W+80)return;ctx.globalAlpha=0.55;if(d.type==='cactus')drawCactus(sx,530,d.scale*0.85);else if(d.type==='cactus2')drawCactus2(sx,520,d.scale*0.85);else if(d.type==='rock')drawRock(sx,530,d.scale);else drawSkull(sx,525,d.scale*0.75);ctx.globalAlpha=1;});}
 
   /* アイテム */
-  items.forEach(itm=>{if(!itm.taken){ctx.font='24px serif';ctx.fillText(itm.type==='apple'?'🍎':itm.type==='heart'?'❤️':'🌸',itm.wx-cameraX-12,itm.y+Math.sin(tick*0.1)*5);}});
+  items.forEach(itm=>{
+    if(!itm.taken){
+      if(itm.type==='fire'){
+        const bob=Math.sin(tick*0.1)*4;
+        ctx.font='26px serif';ctx.fillText('🔥',itm.wx-cameraX-12,itm.y+bob);
+        ctx.strokeStyle=`rgba(255,100,0,${0.3+Math.sin(tick*0.15)*0.2})`;
+        ctx.lineWidth=2;
+        ctx.beginPath();ctx.arc(itm.wx-cameraX,itm.y-10+bob,20,0,Math.PI*2);ctx.stroke();
+      } else {
+        ctx.font='24px serif';ctx.fillText(itm.type==='apple'?'🍎':itm.type==='heart'?'❤️':'🌸',itm.wx-cameraX-12,itm.y+Math.sin(tick*0.1)*5);
+      }
+    }
+  });
 
   /* 敵 */
   enemies.forEach(e=>{
@@ -425,9 +553,11 @@ function draw(){
     ctx.fillStyle=cfg.enemy;ctx.beginPath();ctx.roundRect(e.wx-cameraX,e.y,e.w,e.h,8);ctx.fill();
     ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(e.wx-cameraX+10,e.y+10,3,0,Math.PI*2);ctx.fill();
     ctx.beginPath();ctx.arc(e.wx-cameraX+22,e.y+10,3,0,Math.PI*2);ctx.fill();
-    // Stage3の敵は目が赤く光る
     if(stage===3){ctx.fillStyle='rgba(255,50,50,0.8)';ctx.beginPath();ctx.arc(e.wx-cameraX+10,e.y+10,2,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(e.wx-cameraX+22,e.y+10,2,0,Math.PI*2);ctx.fill();}
   });
+
+  /* ファイアボール */
+  fireballs.forEach(fb=>drawFireball(fb));
 
   /* ゴール旗 */
   ctx.fillStyle='#555';ctx.fillRect(goalWX-cameraX,420,4,100);
@@ -444,6 +574,17 @@ function draw(){
   /* プレイヤー */
   ctx.save();if(invincible&&tick%10<5)ctx.globalAlpha=0.3;
   const px=80,py=player.y,wa=player.onGround?Math.sin(tick*0.2)*10:0;
+
+  if(fireAmmo>0&&fireCooldown<5){
+    const aura=0.4+Math.sin(tick*0.25)*0.2;
+    ctx.globalAlpha*=aura;
+    ctx.fillStyle='#ff6600';
+    ctx.beginPath();ctx.arc(px+32,py+26,7+Math.sin(tick*0.3)*2,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#ffdd00';
+    ctx.beginPath();ctx.arc(px+32,py+26,3,0,Math.PI*2);ctx.fill();
+    ctx.globalAlpha=invincible&&tick%10<5?0.3:1;
+  }
+
   ctx.fillStyle='#333';ctx.fillRect(px+6,py+40+(wa>0?-2:2),6,12);ctx.fillRect(px+18,py+40+(wa>0?2:-2),6,12);
   ctx.fillStyle='#555';ctx.beginPath();ctx.roundRect(px+4,py+18,22,25,5);ctx.fill();
   ctx.fillStyle='#ffdca2';ctx.fillRect(px-2+(wa*0.5),py+22,5,12);ctx.fillRect(px+27-(wa*0.5),py+22,5,12);
@@ -452,22 +593,59 @@ function draw(){
   ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(px+15,py+14,7,0,Math.PI);ctx.fill();
   ctx.fillStyle='#333';ctx.beginPath();ctx.arc(px+11,py+6,1.5,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(px+19,py+6,1.5,0,Math.PI*2);ctx.fill();
   ctx.restore();
+
+  /* 残弾ゲージ */
+  if(state==='playing'&&fireAmmo>0){
+    ctx.fillStyle='rgba(0,0,0,0.18)';ctx.beginPath();ctx.roundRect(16,H-48,26+fireAmmo*20,30,12);ctx.fill();
+    ctx.font='bold 14px sans-serif';ctx.fillStyle='#ffdd00';ctx.fillText('🔥',20,H-26);
+    for(let i=0;i<fireAmmo;i++){
+      ctx.fillStyle=`hsl(${30-i*8},100%,55%)`;
+      ctx.beginPath();ctx.arc(46+i*18,H-32,6,0,Math.PI*2);ctx.fill();
+    }
+  }
 }
 
 function spawnParticles(x,y,c){for(let i=0;i<8;i++)particles.push({x,y,vx:(Math.random()-.5)*5,vy:(Math.random()-.5)*5,life:30,color:c});}
 function addFloat(text,x,y,color){floatingTexts.push({text,x,y,life:40,color});}
-function gameOver(msg){state='dead';showOverlay('Game Over 😢',msg);}
-function showClear(){showOverlay('Clear ✨','素敵な旅でした！');}
+function gameOver(msg){state='dead';fireBadgeEl.style.display='none';showOverlay('Game Over 😢',msg);}
+function showClear(){fireBadgeEl.style.display='none';showOverlay('Clear ✨','素敵な旅でした！');}
 function showOverlay(title,text){
   windIndicatorEl.textContent='';overlay.style.display='flex';
   overlayContent.innerHTML=`<h1>${title}</h1><p>${text}<br><br>Score: <strong>${score.toLocaleString()}</strong></p>
     <button class="actionBtn" onclick="startGame(${stage})">もう一度</button>
     <button class="actionBtn light" onclick="backToMenu()">ステージ選択</button>`;
 }
+
+// ── 入力処理 ──
 function doJump(){if(state==='playing'&&player&&player.onGround)player.vy=-13.5;}
-canvas.addEventListener('mousedown',doJump);
-canvas.addEventListener('touchstart',e=>{e.preventDefault();doJump();});
-window.addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();doJump();}});
+
+canvas.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  const now=Date.now();
+  if(now-lastTapTime<280){
+    shootFireball();
+    lastTapTime=0;
+  } else {
+    lastTapTime=now;
+    doJump();
+  }
+});
+
+canvas.addEventListener('mousedown',e=>{
+  const now=Date.now();
+  if(now-lastTapTime<280){
+    shootFireball();
+    lastTapTime=0;
+  } else {
+    lastTapTime=now;
+    doJump();
+  }
+});
+
+window.addEventListener('keydown',e=>{
+  if(e.code==='Space'){e.preventDefault();doJump();}
+  if(e.code==='KeyX'||e.code==='KeyZ'){e.preventDefault();shootFireball();}
+});
 </script>
 </body>
 </html>
